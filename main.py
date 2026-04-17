@@ -9,6 +9,9 @@ from agent import ResultsIngestor, SurveyDesigner
 from harmonica.client import HarmonicaClient
 
 
+# _build_clients loads .env so credentials stay out of source; all three Bonfires
+# args are required — a missing key raises KeyError before any network call is made.
+# → next: main.py:29
 def _build_clients():
     load_dotenv()
     bonfire = BonfiresClient(
@@ -20,13 +23,19 @@ def _build_clients():
     return bonfire, harmonica
 
 
-def cmd_design(topic: str, bonfire: BonfiresClient, harmonica: HarmonicaClient):
+# cmd_design is the primary path: SurveyDesigner runs KG search + agent design +
+# session creation as one atomic call, then prints the participant URL.
+# (end of walkthrough — see DEVNOTES.md for the full architecture diagram)
+def cmd_design(
+    topic: str, bonfire: BonfiresClient, harmonica: HarmonicaClient
+):
     print(f"Searching KG for: {topic!r}")
     designer = SurveyDesigner(bonfire, harmonica)
     session = designer.create_session(topic)
     session_id = session.get("id") or session.get("session_id", "unknown")
     url = (
-        session.get("url")
+        session.get("join_url")
+        or session.get("url")
         or session.get("participant_url")
         or session.get("link", "")
     )
@@ -55,9 +64,8 @@ def cmd_ingest(
     print(f"Ingesting session {session_id!r} into kengram {kengram_id!r} ...")
     ingestor = ResultsIngestor(bonfire, harmonica)
     result = ingestor.ingest(session_id, kengram_id)
-    print(f"Entities added: {result['entities_added']}")
-    print(f"Edges added:    {result['edges_added']}")
-    print(f"Kengram:        {result['kengram_id']}")
+    print(f"Entities pinned: {result['entities_pinned']}")
+    print(f"Kengram:         {result['kengram_id']}")
 
 
 def main():
