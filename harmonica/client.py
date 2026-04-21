@@ -15,9 +15,6 @@ class HarmonicaError(Exception):
     pass
 
 
-# HarmonicaClient holds a persistent httpx.Client — auth headers are set once at
-# init so individual methods stay free of credential boilerplate.
-# → next: harmonica/client.py:45
 class HarmonicaClient:
     """Thin Python wrapper around the Harmonica REST API v1."""
 
@@ -39,9 +36,6 @@ class HarmonicaClient:
             timeout=30,
         )
 
-    # _request is the single network gateway; all public methods delegate here.
-    # 429 retries use Retry-After if present, otherwise exponential backoff (2^attempt).
-    # → next: harmonica/client.py:70
     def _request(self, method: str, path: str, **kwargs) -> Any:
         for attempt in range(_MAX_RETRIES):
             resp = self._client.request(method, path, **kwargs)
@@ -64,9 +58,7 @@ class HarmonicaClient:
 
     # --- Sessions ---
 
-    # create_session omits None fields — Harmonica rejects explicit null values for
-    # optional params rather than treating them as absent.
-    # → next: agent/__init__.py:1
+    # Harmonica rejects explicit null values for optional params — omit rather than send None.
     def create_session(
         self,
         topic: str,
@@ -116,11 +108,6 @@ class HarmonicaClient:
     def update_session(self, session_id: str, **fields) -> dict:
         return self._request(
             "PATCH", f"/sessions/{session_id}", json=fields
-        )
-
-    def search_sessions(self, query: str) -> list[dict]:
-        return self._request(
-            "GET", "/sessions", params={"keyword": query}
         )
 
     # --- Participants & Responses ---

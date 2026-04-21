@@ -9,7 +9,6 @@ Return a JSON array of exactly <N> objects. Each object must have these fields:
                       grounded in the KG context
   format_suggestion - the discussion format best suited to this topic; choose one of:
                       SWOT, SOAR, Gap Analysis, Force Field, Fishbone, Open Dialogue
-  template_id       - null (no template API available; leave null)
 
 Choose topics that are:
 - Distinct from each other (no overlapping scope)

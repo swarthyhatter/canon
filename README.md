@@ -158,6 +158,7 @@ Thin REST wrapper around `https://app.harmonica.chat/api/v1`.
 | `BONFIRE_AGENT_ID` | Yes | Bonfires agent ID |
 | `HARMONICA_API_KEY` | Yes | Harmonica key (`hm_live_...`) |
 | `HARMONICA_API_URL` | No | Override base URL (default: `https://app.harmonica.chat`) |
+| `CANON_STORE_DIR` | No | Custom path for `canon.db` and vault (default: `store/` in project root) |
 
 ---
 

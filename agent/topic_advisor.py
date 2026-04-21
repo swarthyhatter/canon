@@ -1,11 +1,11 @@
 import json
-import re
 import tempfile
 from pathlib import Path
 
 from bonfires import BonfiresClient
 
 import store.db as db
+from agent.utils import extract_text, parse_json_list
 
 _DISCOVERY_PROMPT = (
     Path(__file__).parent / "prompts" / "discovery_prompt.md"
@@ -51,8 +51,8 @@ class TopicAdvisor:
         response = self.bonfire.agents.chat(
             message=prompt, graph_mode="adaptive"
         )
-        raw_text = self._extract_text(response)
-        suggestions = self._parse_json_list(raw_text)
+        raw_text = extract_text(response)
+        suggestions = parse_json_list(raw_text)
 
         batch_id = db.insert_batch(
             batch_run_id=batch_run_id,
@@ -111,26 +111,3 @@ class TopicAdvisor:
             if summary:
                 lines.append(f"{summary}\n")
         return "\n".join(lines) if lines else "_No entities found._"
-
-    def _extract_text(self, response) -> str:
-        if isinstance(response, dict):
-            for key in ("reply", "message", "content", "text", "response"):
-                if key in response:
-                    return str(response[key])
-        return str(response)
-
-    def _parse_json_list(self, text: str) -> list[dict]:
-        cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", text).strip()
-        try:
-            result = json.loads(cleaned)
-            if isinstance(result, list):
-                return result
-            if isinstance(result, dict):
-                for key in ("topics", "suggestions", "results"):
-                    if key in result and isinstance(result[key], list):
-                        return result[key]
-            raise ValueError(f"Expected a JSON array, got: {cleaned[:200]}")
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Agent did not return valid JSON:\n{text}"
-            ) from exc

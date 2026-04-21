@@ -36,16 +36,16 @@ This document tracks the remaining work identified in the consistency review bel
 
 ---
 
-## Ordered Fix List (recommended sequence)
+## Ordered Fix List
 
-1. **H1** — Extract shared `_extract_text` / `_parse_json_list` to `agent/utils.py`
-2. **M3** — Remove duplicate `search_sessions()` from `harmonica/client.py`
-3. **M2** — Remove `template_id: null` instruction from `discovery_prompt.md`
-4. **M5** — Document `CANON_STORE_DIR` in README env table and `.env.example`
-5. **L1** — Strip stale `→ next:` breadcrumb comments
-6. **M4** — Drop the re-export from `store/__init__.py` (already unused)
-7. **H2** — Add test coverage for `build_survey_params_from_topic`
-8. **L2** — Split `requirements.txt` → runtime + dev
+1. ✅ **H1** — Extracted `extract_text` / `parse_json` / `parse_json_list` to `agent/utils.py`; removed from both agent classes. Also fixed temp file issue — `_write_session_md_from_content` now uses `tempfile` instead of writing `session.md` to cwd.
+2. ✅ **M3** — Removed `search_sessions()` from `harmonica/client.py`
+3. ✅ **M2** — Removed `template_id: null` line from `discovery_prompt.md`
+4. ✅ **M5** — Added `CANON_STORE_DIR` to README env table and `.env.example`
+5. ✅ **L1** — Stripped all stale `→ next:` breadcrumb comments from all files
+6. ✅ **M4** — Dropped unused `export_vault` re-export from `store/__init__.py`
+7. ✅ **H2** — Added `TestBuildSurveyParamsFromTopic` to integration test suite; seeds a topic row via `db.insert_batch/insert_topic`, tests count, required keys, DB storage, and variation diff
+8. ✅ **L2** — Split into `requirements.txt` (runtime) and `requirements-dev.txt` (pytest)
 
 ---
 

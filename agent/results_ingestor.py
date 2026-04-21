@@ -19,9 +19,6 @@ Focus on:
 """
 
 
-# ResultsIngestor runs the reverse of SurveyDesigner: reads a Harmonica session
-# summary and pushes new entities/edges back into the KG.
-# → next: agent/results_ingestor.py:39
 class ResultsIngestor:
     """Ingests a completed Harmonica session summary back into the Bonfires KG."""
 
@@ -33,9 +30,7 @@ class ResultsIngestor:
         self.bonfire = bonfire_client
         self.harmonica = harmonica_client
 
-    # graph_mode="append" is critical — "adaptive" would let the agent overwrite
-    # existing nodes; "append" only adds new ones, preserving prior KG state.
-    # → next: main.py:15
+    # graph_mode="append" only adds new nodes — never overwrites existing KG state.
     def ingest(self, session_id: str, kengram_id: str) -> dict:
         """
         Fetch the Harmonica session summary, extract entities/relationships via

@@ -1,5 +1,5 @@
 """
-Integration test for SurveyDesigner.build_survey_params().
+Integration tests for SurveyDesigner.
 Hits the live Bonfires agent — requires a populated .env file.
 """
 import pytest
@@ -10,6 +10,7 @@ load_dotenv()
 from bonfires import BonfiresClient
 from harmonica.client import HarmonicaClient
 from agent.survey_designer import SurveyDesigner
+import store.db as db
 
 
 REQUIRED_KEYS = ("topic", "goal", "prompt", "questions", "cross_pollination")
@@ -22,7 +23,30 @@ def designer():
     return SurveyDesigner(bonfire, harmonica)
 
 
-class TestSurveyDesignerIntegration:
+@pytest.fixture(scope="module")
+def seeded_topic_id():
+    """Insert a minimal topic row so batch-path tests have a valid topic_id."""
+    db.init()
+    batch_id = db.insert_batch(
+        batch_run_id="test-batch-fixture",
+        type="discovery",
+        query="community governance",
+        context_text="",
+        raw_response="",
+    )
+    return db.insert_topic(
+        batch_id=batch_id,
+        topic="community governance",
+        format_suggestion="SWOT",
+        template_id=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy single-shot path: build_survey_params(topic_query)
+# ---------------------------------------------------------------------------
+
+class TestBuildSurveyParams:
     def test_returns_all_required_keys(self, designer):
         params = designer.build_survey_params("community governance")
         for key in REQUIRED_KEYS:
@@ -51,10 +75,52 @@ class TestSurveyDesignerIntegration:
         params = designer.build_survey_params("community governance")
         assert isinstance(params["cross_pollination"], bool)
 
-    def test_params_are_valid_for_create_session(self, designer):
-        """Params dict must be accepted by HarmonicaClient.create_session."""
+    def test_required_fields_present_for_create_session(self, designer):
         params = designer.build_survey_params("community governance")
-        # Validate create_session accepts the params without error by checking
-        # the required positional args are present
         assert "topic" in params
         assert "goal" in params
+
+
+# ---------------------------------------------------------------------------
+# Batch path: build_survey_params_from_topic(topic_id, n)
+# ---------------------------------------------------------------------------
+
+class TestBuildSurveyParamsFromTopic:
+    def test_single_variation_returns_list_of_one(self, designer, seeded_topic_id):
+        results = designer.build_survey_params_from_topic(seeded_topic_id, n=1)
+        assert isinstance(results, list)
+        assert len(results) == 1
+
+    def test_batch_returns_correct_count(self, designer, seeded_topic_id):
+        results = designer.build_survey_params_from_topic(seeded_topic_id, n=2)
+        assert isinstance(results, list)
+        assert len(results) == 2
+
+    def test_each_result_has_required_keys(self, designer, seeded_topic_id):
+        results = designer.build_survey_params_from_topic(seeded_topic_id, n=1)
+        for result in results:
+            for key in REQUIRED_KEYS:
+                assert key in result, f"Missing key: {key}"
+
+    def test_each_result_has_db_id(self, designer, seeded_topic_id):
+        results = designer.build_survey_params_from_topic(seeded_topic_id, n=1)
+        for result in results:
+            assert "id" in result
+            assert isinstance(result["id"], int)
+
+    def test_each_result_has_batch_run_id(self, designer, seeded_topic_id):
+        results = designer.build_survey_params_from_topic(seeded_topic_id, n=1)
+        for result in results:
+            assert "batch_run_id" in result
+            assert len(result["batch_run_id"]) > 0
+
+    def test_designs_stored_in_db(self, designer, seeded_topic_id):
+        results = designer.build_survey_params_from_topic(seeded_topic_id, n=2)
+        for result in results:
+            stored = db.get_design(result["id"])
+            assert stored is not None
+            assert stored["topic_id"] == seeded_topic_id
+
+    def test_batch_variations_differ(self, designer, seeded_topic_id):
+        results = designer.build_survey_params_from_topic(seeded_topic_id, n=2)
+        assert results[0].get("goal") != results[1].get("goal")

@@ -1,20 +1,19 @@
 import json
-import re
+import tempfile
 from pathlib import Path
 
 from bonfires import BonfiresClient
 
 from harmonica.client import HarmonicaClient
 import store.db as db
+from agent.utils import extract_text, parse_json, parse_json_list
 
 
-# The design prompt lives in an .md file so it can be tuned without touching Python.
-# It instructs the KG agent to return all Harmonica session fields as JSON.
-# → next: agent/survey_designer.py:35
 _DESIGN_PROMPT = (
     Path(__file__).parent / "prompts" / "design_prompt.md"
 ).read_text()
 
+# <N> must be replaced with str(n) before sending — see build_survey_params_from_topic
 _DESIGN_PROMPT_BATCH_SUFFIX = (
     "\n\nIMPORTANT: You must generate exactly <N> design variations for the "
     "SAME topic described in the session context above. Do NOT invent different "
@@ -36,9 +35,6 @@ class SurveyDesigner:
         self.bonfire = bonfire_client
         self.harmonica = harmonica_client
 
-    # Three-step flow: KG search → write session.md → ask agent for JSON params.
-    # session.md is synced as a file so the agent reads it as a document, not inline text.
-    # → next: agent/survey_designer.py:71
     def build_survey_params(self, topic_query: str) -> dict:
         """
         Single-result path. Accepts a raw topic string.
@@ -55,15 +51,14 @@ class SurveyDesigner:
         response = self.bonfire.agents.chat(
             message=_DESIGN_PROMPT, graph_mode="adaptive"
         )
-        raw_text = self._extract_text(response)
-        return self._parse_json(raw_text)
+        return parse_json(extract_text(response))
 
     def build_survey_params_from_topic(
         self, topic_id: int, n: int = 1
     ) -> list[dict]:
         """
         Batch path. Reads topic from DB by ID, generates n design variations,
-        stores each to DB + .md file, returns list of dicts with 'id' key added.
+        stores each to DB, returns list of dicts with 'id' key added.
         """
         topic_row = db.get_topic(topic_id)
         topic_query = topic_row["topic"]
@@ -74,9 +69,7 @@ class SurveyDesigner:
         session_md_content = self._build_session_md_content(
             topic_query, entities, format_suggestion
         )
-        session_md_path = self._write_session_md_from_content(
-            session_md_content
-        )
+        session_md_path = self._write_session_md_from_content(session_md_content)
 
         self.bonfire.agents.sync(
             message=f"Session context for: {topic_query}",
@@ -92,8 +85,7 @@ class SurveyDesigner:
             response = self.bonfire.agents.chat(
                 message=topic_anchor + _DESIGN_PROMPT, graph_mode="adaptive"
             )
-            raw_text = self._extract_text(response)
-            params_list = [self._parse_json(raw_text)]
+            params_list = [parse_json(extract_text(response))]
         else:
             prompt = (
                 topic_anchor
@@ -103,8 +95,7 @@ class SurveyDesigner:
             response = self.bonfire.agents.chat(
                 message=prompt, graph_mode="adaptive"
             )
-            raw_text = self._extract_text(response)
-            params_list = self._parse_json_list(raw_text)
+            params_list = parse_json_list(extract_text(response))
 
         batch_run_id = db.new_batch_id()
         batch_id = db.insert_batch(
@@ -112,7 +103,7 @@ class SurveyDesigner:
             type="design",
             query=topic_query,
             context_text=session_md_content,
-            raw_response=raw_text,
+            raw_response=extract_text(response),
         )
         results = []
         for params in params_list:
@@ -154,9 +145,6 @@ class SurveyDesigner:
 
     # --- helpers ---
 
-    # _write_session_md serializes KG entities to Markdown — the agent produces
-    # better facilitation output from readable prose than from raw JSON dicts.
-    # → next: agent/results_ingestor.py:28
     def _build_session_md_content(
         self,
         topic_query: str,
@@ -184,37 +172,9 @@ class SurveyDesigner:
         return self._write_session_md_from_content(content)
 
     def _write_session_md_from_content(self, content: str) -> str:
-        path = Path("session.md")
-        path.write_text(content)
-        return str(path)
-
-    def _extract_text(self, response) -> str:
-        if isinstance(response, dict):
-            for key in ("reply", "message", "content", "text", "response"):
-                if key in response:
-                    return str(response[key])
-        return str(response)
-
-    def _parse_json(self, text: str) -> dict:
-        cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", text).strip()
-        try:
-            result = json.loads(cleaned)
-            if isinstance(result, list) and result:
-                return result[0]
-            return result
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Agent did not return valid JSON:\n{text}"
-            ) from exc
-
-    def _parse_json_list(self, text: str) -> list[dict]:
-        cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", text).strip()
-        try:
-            result = json.loads(cleaned)
-            if isinstance(result, list):
-                return result
-            return [result]
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Agent did not return valid JSON:\n{text}"
-            ) from exc
+        # Uses a temp file to avoid polluting the working directory
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, prefix="canon_session_"
+        ) as tmp:
+            tmp.write(content)
+            return tmp.name
