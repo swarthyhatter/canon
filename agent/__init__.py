@@ -1,7 +1,8 @@
-# Agent layer entry point — SurveyDesigner (KG → session) and ResultsIngestor
-# (session summary → KG) are the two main agents Canon exposes.
-# → next: agent/survey_designer.py:13
+# Agent layer entry point — TopicAdvisor (KG → topics), SurveyDesigner
+# (topic → session design), and ResultsIngestor (summary → KG).
+# → next: agent/topic_advisor.py:1
 from .survey_designer import SurveyDesigner
 from .results_ingestor import ResultsIngestor
+from .topic_advisor import TopicAdvisor
 
-__all__ = ["SurveyDesigner", "ResultsIngestor"]
+__all__ = ["SurveyDesigner", "ResultsIngestor", "TopicAdvisor"]

@@ -77,6 +77,7 @@ class HarmonicaClient:
         summary_prompt: str | None = None,
         context: str | None = None,
         distribution: list | None = None,
+        template_id: str | None = None,
     ) -> dict:
         body: dict[str, Any] = {
             "topic": topic,
@@ -93,6 +94,8 @@ class HarmonicaClient:
             body["context"] = context
         if distribution:
             body["distribution"] = distribution
+        if template_id:
+            body["template_id"] = template_id
         return self._request("POST", "/sessions", json=body)
 
     def get_session(self, session_id: str) -> dict:

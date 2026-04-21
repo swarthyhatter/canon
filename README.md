@@ -1,6 +1,6 @@
 # Canon
 
-Autonomous bridge between a [Bonfires AI](https://github.com/NERDDAO/bonfires-sdk) knowledge graph and [Harmonica AI](https://github.com/harmonicabot/harmonica-mcp) deliberation sessions. A single CLI command queries the KG for topic context, designs a structured facilitation session, deploys it to Harmonica, and — after participants respond — ingests the summary back into the KG as new entities and relationships.
+Autonomous bridge between a [Bonfires AI](https://github.com/NERDDAO/bonfires-sdk) knowledge graph and [Harmonica AI](https://github.com/harmonicabot/harmonica-mcp) deliberation sessions. A CLI pipeline queries the KG for topic context, designs structured facilitation sessions, deploys them to Harmonica, and — after participants respond — ingests the summary back into the KG as new entities and relationships.
 
 Replaces a manual 10-step `harmonica-chat` session design process.
 
@@ -12,7 +12,7 @@ Replaces a manual 10-step `harmonica-chat` session design process.
 pip install -r requirements.txt
 cp .env.example .env
 # fill in BONFIRE_API_KEY, BONFIRE_ID, BONFIRE_AGENT_ID, HARMONICA_API_KEY
-python main.py
+python main.py --discover "your topic" --batch 3
 ```
 
 ---
@@ -21,60 +21,49 @@ python main.py
 
 | Command | What it does |
 |---|---|
-| `python main.py` | Interactive — prompts for topic query |
-| `python main.py --topic "QUERY"` | Design + deploy a Harmonica session from KG context |
+| `python main.py --discover [QUERY]` | Query KG for topic suggestions (omit QUERY for full KG scan) |
+| `python main.py --discover "QUERY" --batch N` | Generate N topic suggestions |
+| `python main.py --list-topics` | Show all stored topic suggestions |
+| `python main.py --design TOPIC_ID` | Generate session design from stored topic |
+| `python main.py --design TOPIC_ID --batch N` | Generate N design variations, prompts to select one |
+| `python main.py --list-designs [TOPIC_ID]` | Show stored designs (all or filtered by topic) |
+| `python main.py --create DESIGN_ID` | Create Harmonica session from stored design |
+| `python main.py --create DESIGN_ID --template-id ID` | Override template ID on create |
 | `python main.py --session SESSION_ID` | Poll session status and response count |
-| `python main.py --session ID --ingest KG_ID` | Ingest completed session summary into KG |
+| `python main.py --session ID --ingest KG_ID` | Ingest completed session into KG |
+| `python main.py --export-vault` | Regenerate Obsidian vault from DB |
+| `python main.py --topic "QUERY"` | (Legacy) Design + deploy in one step |
 
 ---
 
 ## Architecture
 
-### Full Data Flow
+### 5-Step Pipeline
 
 ```
-topic_query
-    │
-    ▼
-bonfire.kg.search(topic_query, num_results=10)
-    │  Surfaces relevant KG entities (name, summary, labels)
-    ▼
-_write_session_md(topic_query, entities)
-    │  Serializes entities to a Markdown document (session.md)
-    ▼
-bonfire.agents.sync(file_path="session.md")
-    │  Injects session.md into the Bonfires agent context window
-    ▼
-bonfire.agents.chat(design_prompt.md, graph_mode="adaptive")
-    │  Agent reads context + prompt, returns JSON:
-    │  { topic, goal, context, prompt, questions,
-    │    cross_pollination, summary_prompt }
-    ▼
-HarmonicaClient.create_session(**params)
-    │  POST /api/v1/sessions → returns session dict with join_url
-    ▼
-join_url → printed to CLI / shared with participants
-    │
-    ▼
-[Participants respond in Harmonica web app]
-    │
-    ▼
-HarmonicaClient.get_summary(session_id)
-    │  GET /api/v1/sessions/{id}/summary → summary text + themes
-    ▼
-bonfire.agents.chat(ingest_prompt, graph_mode="append")
-    │  Agent extracts entities/relationships and writes them to KG
-    ▼
-bonfire.agents.sync(message=summary_text)
-    │  Pushes the episode as a document to the KG stack
-    ▼
-bonfire.kg.search(summary_text[:200], num_results=5)
-    │  Finds newly surfaced entity UUIDs
-    ▼
-bonfire.kengrams.pin(kengram_id, uuid)  [× per entity]
-    │  Pins entities to the target kengram
-    ▼
-{ "entities_pinned": N, "kengram_id": "..." }
+[Step 1 — Discover]
+TopicAdvisor.discover_batch(query, n)
+  kg.search(query) or kg.get_latest_episodes()  → entities markdown
+  agents.sync(tempfile) → agents.chat(discovery_prompt.md)
+  → N suggestions stored: batches + topics tables
+
+[Step 2 — Review]  ← human picks topic ID from --list-topics
+
+[Step 3 — Design]
+SurveyDesigner.build_survey_params_from_topic(topic_id, n)
+  DB lookup → kg.search(topic) → session.md
+  agents.sync(session.md) → agents.chat(design_prompt.md)
+  → N design variations stored: batches + designs tables
+
+[Step 4 — Create]
+SurveyDesigner.create_session_from_design(design_id)
+  DB lookup → harmonica.create_session(**params)
+  → join_url returned + stored in sessions table
+
+[Step 5 — Ingest]
+ResultsIngestor.ingest(session_id, kengram_id)
+  harmonica.get_summary() → agents.chat(ingest_prompt, graph_mode="append")
+  → kengrams.pin() for each surfaced entity
 ```
 
 ### Component Layers
@@ -82,24 +71,39 @@ bonfire.kengrams.pin(kengram_id, uuid)  [× per entity]
 | Layer | File(s) | Responsibility |
 |---|---|---|
 | CLI | `main.py` | Argument parsing, mode dispatch, env loading |
-| Agent | `agent/survey_designer.py` | KG → session.md → Harmonica session |
+| Agent | `agent/topic_advisor.py` | KG scan → N topic suggestions with format recommendations |
+| Agent | `agent/survey_designer.py` | DB topic → KG → session.md → N design variations |
 | Agent | `agent/results_ingestor.py` | Harmonica summary → KG entities/edges |
 | Client | `harmonica/client.py` | Thin REST wrapper for Harmonica API v1 |
-| Prompt | `agent/prompts/design_prompt.md` | Agent instruction doc loaded at import |
+| Store | `store/db.py` | SQLite — batches → topics → designs → sessions |
+| Store | `store/vault.py` | Export DB to Obsidian vault (2 .md files per batch) |
+| Prompt | `agent/prompts/design_prompt.md` | Session design instruction doc |
+| Prompt | `agent/prompts/discovery_prompt.md` | Topic discovery instruction doc |
 
 ### Project Structure
 
 ```
 canon/
 ├── harmonica/
-│   ├── __init__.py                  exports HarmonicaClient
+│   ├── __init__.py
 │   └── client.py                    REST wrapper — sessions, responses, summaries
 ├── agent/
-│   ├── __init__.py                  exports SurveyDesigner, ResultsIngestor
+│   ├── __init__.py
 │   ├── prompts/
-│   │   └── design_prompt.md         agent instruction doc (edit to tune output)
-│   ├── survey_designer.py           KG → session.md → Harmonica session
+│   │   ├── design_prompt.md         session design instruction (edit to tune output)
+│   │   └── discovery_prompt.md      topic discovery instruction (edit to tune output)
+│   ├── survey_designer.py           DB topic → KG → session.md → Harmonica session
+│   ├── topic_advisor.py             KG scan → N topic suggestions
 │   └── results_ingestor.py          Harmonica summary → KG entities/edges
+├── store/
+│   ├── __init__.py
+│   ├── db.py                        SQLite — batches/topics/designs/sessions
+│   ├── vault.py                     Obsidian vault export
+│   └── vault/                       generated — open in Obsidian
+│       ├── discovery/
+│       ├── design/
+│       ├── sessions/
+│       └── index.md
 ├── tests/
 │   ├── test_harmonica_client.py     unit tests (mocked httpx)
 │   └── test_integration_survey_designer.py  integration tests (live Bonfires)
@@ -110,6 +114,19 @@ canon/
 ├── README.md                        this file
 └── DEVNOTES.md                      developer notes and architecture detail
 ```
+
+---
+
+## Obsidian Vault
+
+`store/vault/` is a valid Obsidian vault — open the folder directly in Obsidian.
+
+1. Open Obsidian → **Open folder as vault** → select `store/vault/`
+2. Install the **Dataview** community plugin
+3. Open `index.md` to see live tables of all discovery and design batches
+
+The vault is regenerated automatically after `--discover` and `--design` runs.  
+Manual refresh: `python main.py --export-vault`
 
 ---
 
@@ -129,37 +146,6 @@ Thin REST wrapper around `https://app.harmonica.chat/api/v1`.
 | `get_responses(session_id, ...)` | Participant threads with filtering |
 | `generate_summary(session_id, prompt)` | Trigger async synthesis |
 | `get_summary(session_id)` | Summary text + themes |
-
----
-
-## SurveyDesigner
-
-```
-build_survey_params(topic_query) -> dict
-create_session(topic_query) -> dict
-```
-
-1. `kg.search(topic_query)` → entities
-2. `_write_session_md()` → writes `session.md` to cwd
-3. `agents.sync(file_path="session.md")` → injects doc into agent context
-4. `agents.chat(design_prompt.md)` → agent returns JSON with all session fields
-5. Parse JSON → return dict ready for `HarmonicaClient.create_session(**params)`
-
-**Facilitation prompt:** `agent/prompts/design_prompt.md` is loaded once at import. Edit it to tune agent output — no Python changes needed.
-
----
-
-## ResultsIngestor
-
-```
-ingest(session_id, kengram_id) -> {"entities_pinned": int, "kengram_id": str}
-```
-
-1. `harmonica.get_summary(session_id)` → summary text
-2. `agents.chat(ingest_prompt, graph_mode="append")` → entity extraction + KG write
-3. `agents.sync(message=summary_text)` → push episode to KG
-4. `kg.search(summary_text[:200])` → find surfaced entity UUIDs
-5. `kengrams.pin(kengram_id, uuid)` for each UUID
 
 ---
 
@@ -188,5 +174,4 @@ python -m pytest tests/ -v                                   # full suite
 ## Known Issues
 
 - **Sparse KG** — if `kg.search()` returns no relevant entities, the agent defaults to a generic session about "deliberation design". Populate the KG with relevant content before running.
-- **`session.md` written to cwd** — should use a temp path in production to avoid polluting the working directory.
 - **Ingest pinning** — pins entities found by a post-sync KG search, not necessarily the newly created nodes. May miss entities not yet indexed.

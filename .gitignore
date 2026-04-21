@@ -9,3 +9,17 @@ env/
 dist/
 build/
 .DS_Store
+
+# Obsidian vault config (user-local, not project code)
+.obsidian/
+store/vault/.obsidian/
+
+# Claude Code session data (local tooling)
+.claude/
+
+# Runtime data — generated from DB, not source
+store/canon.db
+store/vault/
+
+# Temp file written to cwd by legacy single-shot path
+session.md
