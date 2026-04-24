@@ -164,10 +164,28 @@ The vault contains:
 | `--list-designs [TOPIC_ID]` | Show stored designs (all or by topic) |
 | `--create DESIGN_ID` | Create Harmonica session from stored design |
 | `--create DESIGN_ID --template-id ID` | Override template on create |
+| `--create DESIGN_ID --no-cross-pollination` | Disable cross-pollination |
 | `--session SESSION_ID` | Poll session status and response count |
 | `--session ID --ingest KG_ID` | Ingest completed session into KG |
 | `--export-vault` | Regenerate Obsidian vault from DB |
 | `--topic "QUERY"` | (Legacy) Design + deploy in one step |
+
+---
+
+## Streamlit App
+
+Canon includes a web UI for the full deploy workflow. Run it from the project root:
+
+```bash
+streamlit run ui/Create.py
+```
+
+This opens two pages in your browser:
+
+- **Create** — step-by-step wizard: discover topics → generate designs → create a Harmonica session → monitor responses
+- **Explore** — browse all stored topics, designs, and sessions; view facilitation scripts and copyable participant URLs
+
+**Stopping and restarting:** `Ctrl+C` in the terminal to stop. Re-run the same command to restart. State is persisted in `store/canon.db` between runs.
 
 ---
 

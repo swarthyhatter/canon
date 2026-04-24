@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -179,6 +183,7 @@ if st.session_state.selected_design:
                 "Template ID (optional override)",
                 placeholder="leave blank to use design default",
             )
+            cross_pollination = st.toggle("Cross-pollination", value=True)
             run = st.form_submit_button("Create Harmonica Session", use_container_width=True)
 
         if run:
@@ -187,6 +192,7 @@ if st.session_state.selected_design:
                 session = designer.create_session_from_design(
                     design["id"],
                     template_id=template_override.strip() or None,
+                    cross_pollination=cross_pollination,
                 )
             st.session_state.created_session = session
             st.rerun()

@@ -7,8 +7,11 @@ Return a JSON array of exactly <N> objects. Each object must have these fields:
   topic             - concise English title for the deliberation topic (max 12 words)
   rationale         - 1 sentence explaining why this topic needs deliberation now,
                       grounded in the KG context
-  format_suggestion - the discussion format best suited to this topic; choose one of:
-                      SWOT, SOAR, Gap Analysis, Force Field, Fishbone, Open Dialogue
+  format_suggestion - the discussion format best suited to this topic; choose
+                      from the formats in the reference library appended below.
+                      Return the exact name as it appears in the library heading
+                      (e.g. "Driver Mapping", "Force Field Analysis").
+                      If no format fits well, return "Open Dialogue".
 
 Choose topics that are:
 - Distinct from each other (no overlapping scope)

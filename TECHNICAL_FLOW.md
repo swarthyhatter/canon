@@ -102,36 +102,39 @@ with tempfile.NamedTemporaryFile(mode="w", suffix=".md") as tmp:
     bonfire.agents.sync(file_path=tmp.name, title="Discovery Context")
 ```
 
-`agents.sync()` uploads the Markdown document into the **Bonfires agent's context
-window** — essentially handing the agent a briefing document before asking it a
-question. The agent can now reference the KG content in its response.
-
-Think of it as: *"Here is what we know. Now, given this, what should we deliberate on?"*
+`agents.sync()` uploads the Markdown document into the Bonfires agent's context —
+essentially handing the agent a briefing document before asking it a question.
 
 The temp file is deleted immediately after sync.
-
-**Result:** the agent has the KG entities loaded as a readable document.
 
 ---
 
 ### 4. Ask the Agent for Topic Suggestions
 
 ```python
-prompt = discovery_prompt.md  # with <N> replaced by 3
+formats_content = Path("agent/data/facilitation_formats.md").read_text()
+formats_block = "\n\n---\n# Facilitation Formats Reference Library\n\n" + formats_content + "\n---\n\n"
+
+prompt = discovery_prompt_with_N_replaced + formats_block
 bonfire.agents.chat(message=prompt, graph_mode="adaptive")
 ```
 
-Canon sends the `discovery_prompt.md` instructions to the agent. The agent now has
-two things in its context:
+The chat message has two parts:
 
-1. The KG entities document (just synced)
-2. The instructions: *"Identify 3 valuable deliberation topics from this content,
-   return them as a JSON array"*
+1. **Discovery prompt** — instructs the agent: *"Identify 3 deliberation topics from
+   the context, return a JSON array. For each topic, choose a `format_suggestion` from
+   the formats in the reference library appended below."*
 
-`graph_mode="adaptive"` tells Bonfires that the agent should **read** the graph for
-context but **not write** new nodes back — this is a read-only reasoning step.
+2. **Formats library** — the full contents of `facilitation_formats.md`, embedded
+   inline. The library lists 20 complete facilitation formats with selector descriptions.
+   Embedding it inline (rather than relying on a prior `sync()` call) ensures the agent
+   definitely sees it.
 
-The agent returns a JSON array:
+`graph_mode="adaptive"` tells Bonfires the agent should read the graph for context
+but not write new nodes back — this is a read-only reasoning step.
+
+The agent returns a JSON array where each topic includes a `format_suggestion` — the
+name of the facilitation format best suited to it, chosen from the library:
 
 ```json
 [
@@ -139,25 +142,22 @@ The agent returns a JSON array:
     "topic": "Establishing Core Community Values",
     "rationale": "The KG shows recurring tension between inherited norms and emerging
                   community expectations — deliberation could surface alignment.",
-    "format_suggestion": "SWOT",
-    "template_id": null
+    "format_suggestion": "Driver Mapping"
   },
   {
     "topic": "Strategic Knowledge Sharing Practices",
     "rationale": "Multiple entities reference siloed expertise with no bridging...",
-    "format_suggestion": "SOAR",
-    "template_id": null
+    "format_suggestion": "Force Field Analysis"
   },
   {
     "topic": "Barriers to Information Flow",
     "rationale": "...",
-    "format_suggestion": "Fishbone",
-    "template_id": null
+    "format_suggestion": "Iceberg Model"
   }
 ]
 ```
 
-**Result:** 3 topic suggestions grounded in actual KG content.
+**Result:** 3 topic suggestions grounded in actual KG content, each with a format name.
 
 ---
 
@@ -168,17 +168,15 @@ batch_id = db.insert_batch(
     batch_run_id="3efac758",
     type="discovery",
     query="community governance",
-    context_text=entities_md,    # the Markdown document
-    raw_response=raw_json_text,  # the agent's raw output
+    context_text=entities_md,
+    raw_response=raw_json_text,
 )
 for suggestion in suggestions:
-    db.insert_topic(batch_id, topic, format_suggestion, template_id)
+    db.insert_topic(batch_id, topic, format_suggestion)
 ```
 
-The batch metadata (context, raw response) is stored **once** in the `batches` table.
-Each individual topic suggestion gets its own row in `topics`, linked back by
-`batch_id`. Storing context at the batch level avoids repeating the same KG document
-once per topic — all 3 suggestions came from the same KG call and share the same context.
+The batch metadata is stored once in `batches`. Each topic suggestion gets its own
+row in `topics`, linked by `batch_id`.
 
 **Result:** 1 batch row + 3 topic rows in SQLite. Each topic has an integer ID.
 
@@ -186,19 +184,10 @@ once per topic — all 3 suggestions came from the same KG call and share the sa
 
 ### 6. Export to Obsidian Vault
 
-```python
-export_vault()
-```
-
 Canon writes two Markdown files to `store/vault/discovery/`:
 
-- `2026-04-21-3efac758-community-governance-context.md` — the KG entities document
-  with YAML frontmatter for Dataview
-- `2026-04-21-3efac758-community-governance-topics.md` — a table of the 3 topic
-  suggestions plus the agent's raw JSON response
-
-The filename includes `batch_run_id` so two runs with the same query on the same day
-never overwrite each other.
+- `...-community-governance-context.md` — the KG entities document with YAML frontmatter
+- `...-community-governance-topics.md` — a table of the 3 topic suggestions
 
 ---
 
@@ -216,7 +205,7 @@ variations.
 ```python
 topic_row = db.get_topic(topic_id=1)
 # Returns: { topic: "Establishing Core Community Values",
-#            format_suggestion: "SWOT", batch_run_id: "3efac758", ... }
+#            format_suggestion: "Driver Mapping", ... }
 ```
 
 Canon reads the stored topic from SQLite. No network call yet.
@@ -229,8 +218,7 @@ Canon reads the stored topic from SQLite. No network call yet.
 kg.search("Establishing Core Community Values", num_results=10)
 ```
 
-A new, more focused KG search using the specific topic title. This returns entities
-most relevant to the design — narrower and more targeted than the discovery search.
+A new, more focused KG search using the specific topic title.
 
 ---
 
@@ -240,21 +228,16 @@ most relevant to the design — narrower and more targeted than the discovery se
 _build_session_md_content(topic_query, entities, format_suggestion)
 ```
 
-The entities are formatted into a Markdown document again, this time with the
-format suggestion included at the top:
+The entities are formatted into a Markdown document with the format suggestion included:
 
 ```markdown
 # Session Context: Establishing Core Community Values
 
-**Recommended format:** SWOT
+**Recommended format:** Driver Mapping
 
 ## Community Trust Building
-**Labels:** concept, governance
-
 ...
 ```
-
-This document becomes the agent's briefing for session design.
 
 ---
 
@@ -263,29 +246,47 @@ This document becomes the agent's briefing for session design.
 ```python
 bonfire.agents.sync(file_path="session.md")
 
-topic_anchor = 'The deliberation topic is: "Establishing Core Community Values"\n
-                Recommended format: SWOT\n\n'
+formats_block = "\n\n---\n# Facilitation Formats Reference Library\n\n" + formats_content + "\n---\n\n"
 
-prompt = topic_anchor + design_prompt.md + batch_suffix_with_N_3
+topic_anchor = 'The deliberation topic is: "Establishing Core Community Values"\n
+                Recommended format: Driver Mapping\n\n'
+
+prompt = topic_anchor + design_prompt + formats_block + batch_suffix_n3
 bonfire.agents.chat(message=prompt, graph_mode="adaptive")
 ```
 
-The prompt has three parts, concatenated:
+The prompt has four parts:
 
-1. **Topic anchor** — explicitly states the topic at the top of the message. This
-   is a guard against the agent drifting to a different topic if the KG context
-   contains many competing ideas.
+1. **Topic anchor** — explicitly states the topic and the recommended format at the top.
+   Guards against the agent drifting to a different topic.
 
-2. **design_prompt.md** — the main instruction: *"Produce a complete Harmonica session
-   design as a JSON object with these fields: topic, goal, context, prompt, questions,
-   cross_pollination, summary_prompt"*
+2. **Design prompt** — instructs the agent to produce a complete session design as JSON
+   with fields: `topic`, `goal`, `context`, `critical`, `format`, `summary_prompt`.
+   The `format` field is the *name* of the chosen facilitation format — not the script
+   itself. The agent does not write facilitation prompts.
 
-3. **Batch suffix** (when n > 1) — *"Generate exactly 3 variations for this same topic.
-   Return a JSON array of 3 objects."*
+3. **Formats library** — the full `facilitation_formats.md` embedded inline, so the
+   agent can see all 20 formats and make an informed selection by name.
 
-The agent returns 3 complete session designs as a JSON array. Each design is a
-fully-specified Harmonica session — not a summary, but a production-ready facilitation
-script with intake questions, a facilitator prompt, and a synthesis directive.
+4. **Batch suffix** (when n > 1) — *"Generate exactly 3 variations for this topic.
+   Each should differ in framing, emphasis, or facilitation angle."* This is why
+   a batch of 3 designs will typically yield format diversity: the agent interprets
+   "vary the facilitation angle" as choosing different formats for different variations.
+   The first variation usually follows the recommended format; subsequent ones explore
+   alternatives.
+
+The agent returns 3 JSON objects, each with a `format` field containing a name:
+
+```json
+[
+  { "topic": "...", "goal": "...", "context": "...", "critical": "...",
+    "format": "Driver Mapping", "summary_prompt": "..." },
+  { ..., "format": "Force Field Analysis", ... },
+  { ..., "format": "Stakeholder Analysis", ... }
+]
+```
+
+Note: no `prompt` field. The facilitation script is not generated here.
 
 ---
 
@@ -297,10 +298,10 @@ for params in designs:
     db.insert_design(batch_id, topic_id=1, params_json=json.dumps(params))
 ```
 
-Same pattern as discovery: one batch row owns the shared context, each design
-variation gets its own row linked by `batch_id` and `topic_id`.
+Each design row stores the full agent JSON blob in `params_json`. The `format` name
+is stored there too. The facilitation script is resolved later, at create time.
 
-**Result:** 3 design rows in SQLite. Human is prompted to mark a preferred one.
+**Result:** 3 design rows in SQLite.
 
 ---
 
@@ -317,40 +318,70 @@ design = db.get_design(design_id=5)
 params = json.loads(design["params_json"])
 ```
 
-The full session design is read from SQLite — no KG call, no agent call. Everything
-needed was stored at design time.
+The full session design is read from SQLite — no KG call, no agent call.
 
 ---
 
-### 2. POST to Harmonica
+### 2. Resolve Facilitation Script
+
+```python
+format_name = params.pop("format", "")   # e.g. "Driver Mapping"
+loaded = _load_format_prompt(format_name)
+if loaded:
+    params["prompt"] = loaded
+```
+
+`_load_format_prompt()` reads `facilitation_formats.md`, finds the section whose
+`## heading` contains the format name, and returns everything after the
+`### Facilitation Prompt` marker — the complete, verbatim facilitation script.
+
+This is injected directly as `params["prompt"]` before the API call. The script
+is never generated by the AI — it comes from the library file unchanged.
+
+If the format name doesn't match any library entry (e.g. the agent returned an
+unrecognised name), `prompt` is omitted and Harmonica uses its own default facilitator.
+
+---
+
+### 3. Inject Hardcoded Fields
+
+```python
+params["questions"] = INTAKE_QUESTIONS   # Name, Wallet Address, Email Address
+params["cross_pollination"] = cross_pollination   # True by default
+```
+
+Intake questions are always the same — not a per-topic design decision.
+`cross_pollination` is a caller-controlled boolean, defaulting to True.
+
+---
+
+### 4. POST to Harmonica
 
 ```python
 harmonica.create_session(
     topic="Establishing Core Community Values",
-    goal="Understand what residents feel is missing...",
-    prompt="You are a facilitator running a short async session...",
-    questions=[{"text": "What's your name?"}, {"text": "Your role?"}],
+    goal="...",
+    context="...",
+    critical="...",
+    prompt="<verbatim Driver Mapping facilitation script>",
+    questions=[{"text": "Name"}, {"text": "Wallet Address"}, {"text": "Email Address"}],
     cross_pollination=True,
-    summary_prompt="Summarize the key trust barriers identified.",
+    summary_prompt="...",
 )
 ```
 
-`HarmonicaClient` makes a single POST request to
-`https://app.harmonica.chat/api/v1/sessions`. Harmonica provisions the session:
-sets up the AI facilitator with the exact prompt Canon wrote, configures the intake
-questions, and returns a response containing a `join_url`.
+Harmonica provisions the session and returns a `join_url`.
 
 ---
 
-### 3. Store Session + Print URL
+### 5. Store Session + Print URL
 
 ```python
 db.insert_session(design_id=5, harmonica_session_id="abc12345", join_url=url)
 db.mark_selected(design_id=5)
 ```
 
-The Harmonica session ID and join URL are stored in the `sessions` table. The design
-is flagged as selected. The URL is printed to the terminal for sharing.
+The Harmonica session ID and join URL are stored. The URL is printed for sharing.
 
 ---
 
@@ -380,9 +411,8 @@ bonfire.agents.chat(
 )
 ```
 
-The agent is given the session summary and instructed to extract entities and
-relationships, then write them to the KG. `graph_mode="append"` is critical here —
-it means the agent **only adds** new nodes and edges, never overwrites existing ones.
+`graph_mode="append"` means the agent **only adds** new nodes and edges, never
+overwrites existing ones.
 
 ---
 
@@ -392,8 +422,8 @@ it means the agent **only adds** new nodes and edges, never overwrites existing 
 bonfire.agents.sync(message=summary_text)
 ```
 
-The full summary text is pushed to the KG as an **episode** — a timestamped document
-attached to the graph. This makes the session results searchable in future KG queries.
+The full summary text is pushed to the KG as a timestamped episode, making session
+results searchable in future KG queries.
 
 ---
 
@@ -405,9 +435,8 @@ for entity in kg_results["entities"]:
     bonfire.kengrams.pin(kengram_id, entity["uuid"])
 ```
 
-A kengram is a curated collection of KG entities. Canon searches for entities
-surfaced by the summary and pins them to the specified kengram, making the deliberation
-results part of a persistent, queryable collection.
+Entities surfaced by the summary are pinned to the specified kengram — a curated,
+queryable collection of KG nodes.
 
 ---
 
@@ -424,11 +453,12 @@ DISCOVER
   _entities_to_md() ─────────── formats entities as readable Markdown
       │ entities_md string
       ▼
-  agents.sync(tempfile) ─────── loads document into agent context window
+  agents.sync(tempfile) ─────── loads KG document into agent context
       │
       ▼
-  agents.chat(discovery_prompt) ← agent reads KG briefing + instructions
-      │ JSON array: [{topic, rationale, format_suggestion}, ...]
+  agents.chat(discovery_prompt + formats_library)
+      │ agent sees: KG context + 20 facilitation formats with selector descriptions
+      │ returns: [{topic, rationale, format_suggestion}, ...]
       ▼
   db.insert_batch() + db.insert_topic() × N ── stored to SQLite
       │
@@ -441,7 +471,7 @@ DESIGN
   topic_id (from DB)
       │
       ▼
-  db.get_topic() ──────────────── read stored topic (no network call)
+  db.get_topic() ──────────────── read stored topic + format_suggestion
       │
       ▼
   kg.search(topic) ────────────── targeted KG search for design context
@@ -453,8 +483,10 @@ DESIGN
   agents.sync(session.md) ─────── load design context into agent
       │
       ▼
-  agents.chat(topic_anchor + design_prompt + batch_suffix)
-      │ JSON array: [{topic, goal, prompt, questions, ...}, ...]
+  agents.chat(topic_anchor + design_prompt + formats_library [+ batch_suffix])
+      │ agent sees: topic anchor + design instructions + 20 formats with full prompts
+      │ returns: [{topic, goal, context, critical, format, summary_prompt}, ...]
+      │          note: no 'prompt' field — agent returns format NAME only
       ▼
   db.insert_batch() + db.insert_design() × N ── stored to SQLite
 
@@ -464,8 +496,16 @@ CREATE
   design_id (from DB)
       │
       ▼
-  db.get_design() ──────────────── read stored design (no network call)
-      │ params_json
+  db.get_design() ──────────────── read stored design params
+      │ params_json → format name (e.g. "Driver Mapping")
+      ▼
+  _load_format_prompt(format_name) ── read verbatim script from formats library
+      │ complete facilitation prompt text
+      ▼
+  inject: params["prompt"] = verbatim_script
+  inject: params["questions"] = [Name, Wallet Address, Email Address]
+  inject: params["cross_pollination"] = True
+      │
       ▼
   harmonica.create_session(**params) ── POST to Harmonica API
       │ {join_url, session_id, ...}
@@ -500,23 +540,31 @@ INGEST
 
 ## Key Design Principles
 
-**The agent is the intelligence layer.** Canon does not generate session designs
-programmatically. It uses the Bonfires agent — a language model with access to your KG
-— to read real content and write real facilitation scripts. The quality of output
-scales with the quality of your KG.
+**The agent is the intelligence layer, not the content layer.** Canon uses the Bonfires
+agent to read real KG content and make judgment calls (which topic? which format?). But
+it does not ask the agent to write facilitation scripts — that's the library's job. The
+quality of topic and format selection scales with the quality of your KG.
 
 **Context is passed as documents, not data.** Entities are formatted as Markdown prose
 before being synced to the agent. Language models reason better over readable text than
 raw JSON structures.
 
+**Critical context is embedded inline, not just synced.** The facilitation formats
+library is appended directly to the chat message rather than relying on `agents.sync()`
+alone. Synced documents may or may not surface in the agent's active context; inline
+content always does.
+
 **graph_mode controls whether the KG changes.**
 - `"adaptive"` — agent reads graph for context, may suggest but does not write
 - `"append"` — agent actively writes new nodes and edges, never overwrites existing ones
 
-**Human review happens between pipeline steps.** The agents never automatically
-promote a topic to a design or a design to a session. The human picks the IDs. Canon
-is a tool for the human, not an autonomous loop.
+**Human review happens between pipeline steps.** The agents never automatically promote
+a topic to a design or a design to a session. The human picks the IDs.
 
-**Context is stored once per batch.** All N topics in one `--discover --batch 3` run
-share the same KG context (same search, same entities). Storing it in the `batches`
-table and linking topics by `batch_id` avoids storing 3 copies of identical data.
+**Format selection and prompt injection are separate concerns.** The agent picks a
+format name (a judgment call). Python injects the verbatim script (a deterministic
+lookup). LLMs cannot reliably copy long text verbatim, so we don't ask them to.
+
+**Context is stored once per batch.** All N topics in one `--batch 3` run share the
+same KG context. Storing it in `batches` and linking by `batch_id` avoids N copies
+of identical data.

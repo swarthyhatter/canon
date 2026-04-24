@@ -68,6 +68,7 @@ class HarmonicaClient:
         cross_pollination: bool = False,
         summary_prompt: str | None = None,
         context: str | None = None,
+        critical: str | None = None,
         distribution: list | None = None,
         template_id: str | None = None,
     ) -> dict:
@@ -84,6 +85,8 @@ class HarmonicaClient:
             body["summary_prompt"] = summary_prompt
         if context:
             body["context"] = context
+        if critical:
+            body["critical"] = critical
         if distribution:
             body["distribution"] = distribution
         if template_id:

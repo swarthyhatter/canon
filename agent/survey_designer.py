@@ -13,6 +13,32 @@ _DESIGN_PROMPT = (
     Path(__file__).parent / "prompts" / "design_prompt.md"
 ).read_text()
 
+_FORMATS_LIBRARY_PATH = str(
+    Path(__file__).parent / "data" / "facilitation_formats.md"
+)
+
+
+def _load_format_prompt(format_name: str) -> str | None:
+    text = Path(_FORMATS_LIBRARY_PATH).read_text()
+    sections = text.split("\n---\n")
+    for section in sections:
+        heading_line = next(
+            (line for line in section.splitlines() if line.startswith("## ")), ""
+        )
+        if format_name.lower() in heading_line.lower():
+            marker = "### Facilitation Prompt\n"
+            idx = section.find(marker)
+            if idx != -1:
+                return section[idx + len(marker):].strip()
+    return None
+
+
+INTAKE_QUESTIONS = [
+    {"text": "Name"},
+    {"text": "Wallet Address"},
+    {"text": "Email Address"},
+]
+
 # <N> must be replaced with str(n) before sending — see build_survey_params_from_topic
 _DESIGN_PROMPT_BATCH_SUFFIX = (
     "\n\nIMPORTANT: You must generate exactly <N> design variations for the "
@@ -76,20 +102,27 @@ class SurveyDesigner:
             file_path=session_md_path,
             title=f"Session: {topic_query}",
         )
-
+        formats_content = Path(_FORMATS_LIBRARY_PATH).read_text()
+        formats_block = (
+            "\n\n---\n# Facilitation Formats Reference Library\n\n"
+            + formats_content
+            + "\n---\n\n"
+        )
         topic_anchor = (
             f"The deliberation topic is: \"{topic_query}\"\n"
             f"Recommended format: {format_suggestion or 'Open Dialogue'}\n\n"
         )
         if n == 1:
             response = self.bonfire.agents.chat(
-                message=topic_anchor + _DESIGN_PROMPT, graph_mode="adaptive"
+                message=topic_anchor + _DESIGN_PROMPT + formats_block,
+                graph_mode="adaptive",
             )
             params_list = [parse_json(extract_text(response))]
         else:
             prompt = (
                 topic_anchor
                 + _DESIGN_PROMPT
+                + formats_block
                 + _DESIGN_PROMPT_BATCH_SUFFIX
             ).replace("<N>", str(n))
             response = self.bonfire.agents.chat(
@@ -123,12 +156,22 @@ class SurveyDesigner:
         return self.harmonica.create_session(**params)
 
     def create_session_from_design(
-        self, design_id: int, template_id: str | None = None
+        self,
+        design_id: int,
+        template_id: str | None = None,
+        cross_pollination: bool = True,
     ) -> dict:
         """Create a Harmonica session from a stored design row."""
         design = db.get_design(design_id)
         params = json.loads(design["params_json"])
         tid = template_id or design.get("template_id")
+        format_name = params.pop("format", "") or ""
+        if format_name:
+            loaded = _load_format_prompt(format_name)
+            if loaded:
+                params["prompt"] = loaded
+        params["questions"] = INTAKE_QUESTIONS
+        params["cross_pollination"] = cross_pollination
         session = self.harmonica.create_session(**params, template_id=tid)
         db.mark_selected(design_id)
         harmonica_id = session.get("id") or session.get("session_id", "")

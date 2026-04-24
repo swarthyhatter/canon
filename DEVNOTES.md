@@ -4,8 +4,6 @@
 
 **Canon** autonomously bridges a [Bonfires AI](https://github.com/NERDDAO/bonfires-sdk) knowledge graph with [Harmonica AI](https://github.com/harmonicabot/harmonica-mcp) deliberation sessions. A CLI pipeline queries the KG for topic context, designs structured facilitation sessions, deploys them to Harmonica, and — after participants respond — ingests the summary back into the KG as new entities and relationships.
 
-Replaces a manual 10-step `harmonica-chat` session design process.
-
 ---
 
 ## Architecture
@@ -16,21 +14,21 @@ Replaces a manual 10-step `harmonica-chat` session design process.
 [Step 1 — Discover]
 TopicAdvisor.discover_batch(query, n)
   kg.search(query) or kg.get_latest_episodes()
-    → entities_md → agents.sync(tempfile) → agents.chat(discovery_prompt.md)
-    → N topic suggestions stored in DB (batches + topics tables)
+    → entities_md → agents.sync(tempfile) → agents.chat(discovery_prompt + formats_library)
+    → N topic suggestions stored in DB (batches + topics tables, each with format_suggestion)
 
 [Step 2 — Review]  ← human selects topic ID from --list-topics
 
 [Step 3 — Design]
 SurveyDesigner.build_survey_params_from_topic(topic_id, n)
   DB lookup → kg.search(topic) → session.md
-    → agents.sync(session.md) → agents.chat(design_prompt.md)
-    → N design variations stored in DB (batches + designs tables)
+    → agents.sync(session.md) → agents.chat(design_prompt + formats_library)
+    → N design variations stored in DB (batches + designs tables, each with format name)
 
 [Step 4 — Create]
 SurveyDesigner.create_session_from_design(design_id)
-  DB lookup → harmonica.create_session(**params)
-    → join_url returned + stored in sessions table
+  DB lookup → _load_format_prompt(format_name) → inject verbatim facilitation script
+    → harmonica.create_session(**params) → join_url stored in sessions table
 
 [Step 5 — Ingest]
 ResultsIngestor.ingest(session_id, kengram_id)
@@ -43,14 +41,16 @@ ResultsIngestor.ingest(session_id, kengram_id)
 | Layer | File(s) | Responsibility |
 |---|---|---|
 | CLI | `main.py` | Argument parsing, mode dispatch, env loading |
+| Web UI | `ui/Create.py`, `ui/pages/1_Explore.py` | Streamlit wizard + explorer |
 | Agent | `agent/topic_advisor.py` | KG scan → N topic suggestions with format recommendations |
 | Agent | `agent/survey_designer.py` | DB topic → KG → session.md → N design variations |
 | Agent | `agent/results_ingestor.py` | Harmonica summary → KG entities/edges |
 | Client | `harmonica/client.py` | Thin REST wrapper for Harmonica API v1 |
 | Store | `store/db.py` | SQLite — batches → topics → designs → sessions |
 | Store | `store/vault.py` | Export DB to Obsidian vault (2 .md files per batch) |
-| Prompt | `agent/prompts/design_prompt.md` | Session design instruction doc |
-| Prompt | `agent/prompts/discovery_prompt.md` | Topic discovery instruction doc |
+| Data | `agent/data/facilitation_formats.md` | 20 complete facilitation prompts, selected by name |
+| Prompt | `agent/prompts/design_prompt.md` | Session design instruction |
+| Prompt | `agent/prompts/discovery_prompt.md` | Topic discovery instruction |
 
 ---
 
@@ -74,7 +74,7 @@ CREATE TABLE topics (
     created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     batch_id          INTEGER REFERENCES batches(id),
     topic             TEXT,
-    format_suggestion TEXT,
+    format_suggestion TEXT,  -- format name from facilitation_formats.md
     template_id       TEXT
 );
 
@@ -83,7 +83,7 @@ CREATE TABLE designs (
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     batch_id     INTEGER REFERENCES batches(id),
     topic_id     INTEGER REFERENCES topics(id),
-    params_json  TEXT,
+    params_json  TEXT,    -- full agent JSON: topic, goal, context, critical, format, summary_prompt
     template_id  TEXT,
     selected     INTEGER DEFAULT 0
 );
@@ -98,8 +98,9 @@ CREATE TABLE sessions (
 );
 ```
 
-`context_text` and `raw_response` are identical for all N topics/designs produced in one run,
-so they live on `batches` rather than being repeated per row.
+`context_text` and `raw_response` are identical for all N topics/designs produced in one run — stored once on `batches`, not repeated per row.
+
+`params_json` stores what the agent produced at design time. The `format` field is a name string (e.g. `"Driver Mapping"`). The actual facilitation script is NOT stored here — it is resolved at create time via `_load_format_prompt()`.
 
 ---
 
@@ -113,13 +114,19 @@ so they live on `batches` rather than being repeated per row.
 | All metadata | English only | Harmonica's facilitation layer is English-only; non-Latin chars corrupt |
 | KG mode (design) | `graph_mode="adaptive"` | Agent reads context without overwriting graph |
 | KG mode (ingest) | `graph_mode="append"` | Adds new nodes/edges, never clobbers existing |
-| Session context delivery | `session.md` via `agents.sync()` | Richer than inline bullet list; agent treats it as a document |
-| Facilitation prompt | Agent-generated from `design_prompt.md` | Matches harmonica-chat Step 11 spec; editable without touching Python |
+| Facilitation format selection | Agent returns format name; Python injects verbatim prompt | LLMs can't reliably copy long text verbatim — split responsibility: agent picks, code injects |
+| Formats library delivery | Embedded inline in chat message | `agents.sync()` alone is unreliable for ensuring file content is in active context |
+| Facilitation scripts | Pre-written in `agent/data/facilitation_formats.md` | Deterministic, inspectable, version-controlled; better quality than agent-generated |
+| Format diversity in batch designs | Emergent from batch suffix instruction | Suffix says "vary framing and facilitation angle" — agent interprets this as format variety |
+| `critical` field | Agent-generated, stored in params_json | Shapes AI facilitator probing behavior per topic; flows to API automatically via `**params` |
+| Intake questions | Hardcoded: Name, Wallet Address, Email | Always consistent; not a per-topic design decision |
+| `cross_pollination` | Caller-controlled boolean, default True | Harmonica feature; not a KG-derived parameter |
 | Batch context storage | `batches` table owns context_text/raw_response | Context identical for all N rows in a run — store once |
 | Vault format | 2 files per batch (context + list) | Diffable, Obsidian-compatible, no duplication |
 | Discovery without query | `kg.get_latest_episodes()` | `kg.search()` requires non-empty string |
 | topic_anchor in prompt | Prepend topic to chat message | Prevents agent going off-topic when KG context is broad |
 | template_id | Optional free string passed to POST /sessions | No GET /templates endpoint exists in Harmonica API |
+| UI location | `ui/Create.py` + `ui/pages/1_Explore.py` | Co-located; Streamlit requires `pages/` as sibling of entry point |
 
 ---
 
@@ -135,7 +142,9 @@ canon/
 │   ├── prompts/
 │   │   ├── design_prompt.md         session design instruction (edit to tune output)
 │   │   └── discovery_prompt.md      topic discovery instruction (edit to tune output)
-│   ├── survey_designer.py           DB topic → KG → session.md → design variations
+│   ├── data/
+│   │   └── facilitation_formats.md  20 complete facilitation prompts
+│   ├── survey_designer.py           DB topic → KG → design variations → session
 │   ├── topic_advisor.py             KG scan → N topic suggestions
 │   └── results_ingestor.py          Harmonica summary → KG entities/edges
 ├── store/
@@ -143,6 +152,11 @@ canon/
 │   ├── db.py                        SQLite schema and all CRUD functions
 │   ├── vault.py                     Obsidian vault export (2 files per batch)
 │   └── vault/                       generated — open in Obsidian
+├── ui/
+│   ├── Create.py                    Streamlit entry point (deploy wizard)
+│   ├── app_utils.py                 Shared client initialisation
+│   └── pages/
+│       └── 1_Explore.py             Browse topics, designs, sessions
 ├── tests/
 │   ├── test_harmonica_client.py     unit tests (mocked httpx)
 │   └── test_integration_survey_designer.py  integration tests (live Bonfires)
@@ -162,11 +176,11 @@ Thin REST wrapper mirroring [`harmonica-mcp/src/client.ts`](https://github.com/h
 
 **Auth:** `Authorization: Bearer {HARMONICA_API_KEY}` on every request.  
 **Base URL:** `HARMONICA_API_URL` env var, default `https://app.harmonica.chat`.  
-**Retry:** up to 3 attempts on HTTP 429 with `Retry-After` backoff. On the final attempt raises `HarmonicaError("Max retries exceeded")`.
+**Retry:** up to 3 attempts on HTTP 429 with `Retry-After` backoff.
 
 | Method | Notes |
 |---|---|
-| `create_session(topic, goal, prompt, questions, cross_pollination, summary_prompt, context, distribution, template_id)` | Returns session dict including `join_url` |
+| `create_session(topic, goal, prompt, questions, cross_pollination, summary_prompt, context, critical, distribution, template_id)` | Returns session dict including `join_url` |
 | `get_session(session_id)` | Status, participant count, metadata |
 | `list_sessions(status, keyword)` | Filterable list |
 | `update_session(session_id, **fields)` | PATCH arbitrary fields |
@@ -188,10 +202,10 @@ discover_batch(query=None, n=3) -> list[dict]  # n suggestions, 'id' key added
 1. With `query`: `kg.search(query, num_results=20)` → entities
 2. Without `query`: `kg.get_latest_episodes(agent_id, limit=20)` → episodes as entities
 3. Serialize entities to markdown → write to tempfile → `agents.sync(tempfile)` → delete tempfile
-4. `agents.chat(discovery_prompt.md)` with `<N>` replaced → parse JSON array
-5. `db.insert_batch()` then `db.insert_topic()` per suggestion
-
-**Prompt:** `agent/prompts/discovery_prompt.md` loaded once at import. Edit to tune output.
+4. Read `facilitation_formats.md` → append inline to chat message
+5. `agents.chat(discovery_prompt + formats_library)` with `<N>` replaced → parse JSON array
+6. Each suggestion includes `format_suggestion` — a name from the formats library
+7. `db.insert_batch()` then `db.insert_topic()` per suggestion
 
 ---
 
@@ -199,7 +213,7 @@ discover_batch(query=None, n=3) -> list[dict]  # n suggestions, 'id' key added
 
 ```python
 build_survey_params_from_topic(topic_id, n=1) -> list[dict]
-create_session_from_design(design_id, template_id=None) -> dict
+create_session_from_design(design_id, template_id=None, cross_pollination=True) -> dict
 build_survey_params(topic_query) -> dict       # legacy single-shot
 create_session(topic_query) -> dict            # legacy single-shot
 ```
@@ -208,12 +222,25 @@ create_session(topic_query) -> dict            # legacy single-shot
 1. `db.get_topic(topic_id)` → topic text + format_suggestion
 2. `kg.search(topic, num_results=10)` → entities
 3. Build session.md content; `agents.sync(session.md)`
-4. Prepend `topic_anchor` to prompt (prevents off-topic agent output)
-5. n=1: single `agents.chat()` call, wrap result in list
-6. n>1: append `_DESIGN_PROMPT_BATCH_SUFFIX` with `<N>` substituted; parse JSON array
-7. `db.insert_batch()` then `db.insert_design()` per variation
+4. Read `facilitation_formats.md` → append inline to chat message
+5. Prepend `topic_anchor` (prevents off-topic agent output)
+6. n=1: single `agents.chat()` call, wrap result in list
+7. n>1: append `_DESIGN_PROMPT_BATCH_SUFFIX` with `<N>` substituted; parse JSON array
+8. Agent returns JSON with fields: `topic`, `goal`, `context`, `critical`, `format`, `summary_prompt`
+9. `format` is a name string — no facilitation script generated at this stage
+10. `db.insert_batch()` then `db.insert_design()` per variation
 
-**Prompt:** `agent/prompts/design_prompt.md` loaded once at import. Edit to tune output.
+**Create flow (`create_session_from_design`):**
+1. `db.get_design(design_id)` → `params_json`
+2. `params.pop("format")` → `_load_format_prompt(format_name)` → inject as `params["prompt"]`
+3. If format name not found in library, `prompt` is omitted (Harmonica auto-generates)
+4. Inject hardcoded `INTAKE_QUESTIONS` and `cross_pollination`
+5. `harmonica.create_session(**params, template_id=tid)`
+
+**`_load_format_prompt(format_name)`:**
+- Splits `facilitation_formats.md` on `\n---\n`
+- Finds section whose `## heading` contains `format_name` (case-insensitive)
+- Returns text after `### Facilitation Prompt\n` marker
 
 ---
 
@@ -242,6 +269,7 @@ python main.py --design TOPIC_ID               # generate design
 python main.py --design TOPIC_ID --batch N     # N design variations
 python main.py --list-designs [TOPIC_ID]       # show stored designs
 python main.py --create DESIGN_ID              # create Harmonica session
+python main.py --create DESIGN_ID --no-cross-pollination
 python main.py --session SESSION_ID            # poll status
 python main.py --session ID --ingest KG_ID     # ingest into KG
 python main.py --export-vault                  # regenerate Obsidian vault
@@ -261,6 +289,7 @@ python main.py --topic "QUERY"                 # (legacy) single-shot
 | `BONFIRE_AGENT_ID` | Yes | Bonfires agent ID |
 | `HARMONICA_API_KEY` | Yes | Harmonica key (`hm_live_...`) |
 | `HARMONICA_API_URL` | No | Override base URL |
+| `CANON_STORE_DIR` | No | Custom path for `canon.db` and vault |
 
 ---
 

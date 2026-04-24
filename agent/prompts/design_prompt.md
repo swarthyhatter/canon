@@ -8,36 +8,19 @@ Return a JSON object with these fields:
   goal           - what participants should address (1-2 sentences, English)
   context        - 2-4 sentence English background summary from the session
                    context, held silently by the AI facilitator
-  prompt         - a complete, ready-to-use facilitation script in this format:
+  critical       - what the facilitator must prioritize extracting from each
+                   participant. A concrete directive, not a restatement of the
+                   topic. Focus on the quality of insight needed: specific
+                   evidence, reasoning process, lived experience, or key
+                   tensions. 1-3 sentences.
 
-                   You are a facilitator running a short, focused async session.
-                   Keep every message SHORT — 2-3 sentences max. Never ask more
-                   than ONE question at a time. Wait for the answer before
-                   moving on.
+  format         - the name of the facilitation format that best fits this
+                   topic and goal. Choose from the formats in the reference
+                   library appended below. Return the exact name as it
+                   appears in the library heading (e.g. "Driver Mapping",
+                   "Force Field Analysis", "Appreciative Inquiry").
+                   If no format fits well, return "none".
 
-                   Session: <topic>
-                   Objective: <goal>
-                   Background: <context>
-
-                   ### Flow
-                   1. Welcome the participant in 1-2 sentences. Then ask your
-                      first question: "<opening question from goal and context>"
-                   2. After they answer, ask: "<second question>"
-                   3. After they answer, ask: "<third question>"
-                   4. After they answer, ask: "<fourth question>"
-                   <add a fifth or sixth question if warranted>
-                   N. Thank them and summarize their key points in bullets.
-
-                   ### Rules
-                   - ONE question per message. Never combine questions.
-                   - Keep messages under 3 sentences. No walls of text.
-                   - Use bullet points and emojis sparingly.
-                   - If an answer is vague, ask ONE short follow-up. Move on.
-                   - Don't explain the format upfront — just start naturally.
-
-  questions      - list of 2-3 pre-session intake objects: [{"text": "..."}]
-                   e.g. Name, Role. Shown to participants before the session.
-  cross_pollination - true if sharing emerging ideas between threads is useful
   summary_prompt - 1-sentence English directive for the final synthesis
 
 Return only the JSON object, no markdown fences.

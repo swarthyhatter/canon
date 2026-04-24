@@ -106,6 +106,7 @@ def _prompt_select_design(designs: list[dict]):
 def cmd_create(
     design_id: int,
     template_id: str | None,
+    cross_pollination: bool,
     bonfire: BonfiresClient,
     harmonica: HarmonicaClient,
 ):
@@ -113,7 +114,9 @@ def cmd_create(
     topic = db.get_topic(design["topic_id"])
     print(f"Creating session from design #{design_id} (topic: {topic['topic']!r}) ...")
     designer = SurveyDesigner(bonfire, harmonica)
-    session = designer.create_session_from_design(design_id, template_id=template_id)
+    session = designer.create_session_from_design(
+        design_id, template_id=template_id, cross_pollination=cross_pollination
+    )
     session_id = session.get("id") or session.get("session_id", "unknown")
     url = (
         session.get("join_url") or session.get("url")
@@ -220,6 +223,10 @@ def main():
         "--template-id", metavar="ID",
         help="Harmonica template ID (used with --create)",
     )
+    parser.add_argument(
+        "--no-cross-pollination", action="store_true", default=False,
+        help="Disable cross-pollination for the created session (default: enabled)",
+    )
     # List / export commands
     parser.add_argument("--list-topics", action="store_true")
     parser.add_argument(
@@ -268,7 +275,11 @@ def main():
         return
 
     if args.create is not None:
-        cmd_create(args.create, args.template_id, bonfire, harmonica)
+        cmd_create(
+            args.create, args.template_id,
+            cross_pollination=not args.no_cross_pollination,
+            bonfire=bonfire, harmonica=harmonica,
+        )
         return
 
     if args.topic:

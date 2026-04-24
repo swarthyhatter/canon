@@ -15,6 +15,11 @@ cp .env.example .env
 python main.py --discover "your topic" --batch 3
 ```
 
+**Web UI:**
+```bash
+streamlit run ui/Create.py
+```
+
 ---
 
 ## CLI Usage
@@ -25,10 +30,11 @@ python main.py --discover "your topic" --batch 3
 | `python main.py --discover "QUERY" --batch N` | Generate N topic suggestions |
 | `python main.py --list-topics` | Show all stored topic suggestions |
 | `python main.py --design TOPIC_ID` | Generate session design from stored topic |
-| `python main.py --design TOPIC_ID --batch N` | Generate N design variations, prompts to select one |
+| `python main.py --design TOPIC_ID --batch N` | Generate N design variations |
 | `python main.py --list-designs [TOPIC_ID]` | Show stored designs (all or filtered by topic) |
 | `python main.py --create DESIGN_ID` | Create Harmonica session from stored design |
 | `python main.py --create DESIGN_ID --template-id ID` | Override template ID on create |
+| `python main.py --create DESIGN_ID --no-cross-pollination` | Disable cross-pollination |
 | `python main.py --session SESSION_ID` | Poll session status and response count |
 | `python main.py --session ID --ingest KG_ID` | Ingest completed session into KG |
 | `python main.py --export-vault` | Regenerate Obsidian vault from DB |
@@ -44,21 +50,21 @@ python main.py --discover "your topic" --batch 3
 [Step 1 — Discover]
 TopicAdvisor.discover_batch(query, n)
   kg.search(query) or kg.get_latest_episodes()  → entities markdown
-  agents.sync(tempfile) → agents.chat(discovery_prompt.md)
-  → N suggestions stored: batches + topics tables
+  agents.sync(tempfile) → agents.chat(discovery_prompt.md + formats library)
+  → N suggestions stored: batches + topics tables (each with format_suggestion)
 
 [Step 2 — Review]  ← human picks topic ID from --list-topics
 
 [Step 3 — Design]
 SurveyDesigner.build_survey_params_from_topic(topic_id, n)
   DB lookup → kg.search(topic) → session.md
-  agents.sync(session.md) → agents.chat(design_prompt.md)
-  → N design variations stored: batches + designs tables
+  agents.sync(session.md) → agents.chat(design_prompt.md + formats library)
+  → N design variations stored: batches + designs tables (each with format name)
 
 [Step 4 — Create]
 SurveyDesigner.create_session_from_design(design_id)
-  DB lookup → harmonica.create_session(**params)
-  → join_url returned + stored in sessions table
+  DB lookup → _load_format_prompt(format) → injects verbatim facilitation script
+  → harmonica.create_session(**params) → join_url stored in sessions table
 
 [Step 5 — Ingest]
 ResultsIngestor.ingest(session_id, kengram_id)
@@ -66,19 +72,27 @@ ResultsIngestor.ingest(session_id, kengram_id)
   → kengrams.pin() for each surfaced entity
 ```
 
+### Facilitation Formats
+
+`agent/data/facilitation_formats.md` contains 20 complete facilitation prompts (Driver Mapping, Force Field Analysis, Appreciative Inquiry, SWOT, etc.). During discovery and design, the agent selects the best-fitting format by name. At session creation, Canon reads the matching prompt verbatim from the library and passes it to Harmonica — the agent never writes facilitation scripts.
+
+When generating N > 1 design variations, the agent naturally produces format diversity: the first variation typically matches the recommended format from discovery, and subsequent variations explore different facilitation angles.
+
 ### Component Layers
 
 | Layer | File(s) | Responsibility |
 |---|---|---|
 | CLI | `main.py` | Argument parsing, mode dispatch, env loading |
+| Web UI | `ui/Create.py`, `ui/pages/1_Explore.py` | Streamlit wizard + explorer |
 | Agent | `agent/topic_advisor.py` | KG scan → N topic suggestions with format recommendations |
 | Agent | `agent/survey_designer.py` | DB topic → KG → session.md → N design variations |
 | Agent | `agent/results_ingestor.py` | Harmonica summary → KG entities/edges |
 | Client | `harmonica/client.py` | Thin REST wrapper for Harmonica API v1 |
 | Store | `store/db.py` | SQLite — batches → topics → designs → sessions |
 | Store | `store/vault.py` | Export DB to Obsidian vault (2 .md files per batch) |
-| Prompt | `agent/prompts/design_prompt.md` | Session design instruction doc |
-| Prompt | `agent/prompts/discovery_prompt.md` | Topic discovery instruction doc |
+| Data | `agent/data/facilitation_formats.md` | 20 complete facilitation prompts, selected by name |
+| Prompt | `agent/prompts/design_prompt.md` | Session design instruction (edit to tune output) |
+| Prompt | `agent/prompts/discovery_prompt.md` | Topic discovery instruction (edit to tune output) |
 
 ### Project Structure
 
@@ -90,9 +104,11 @@ canon/
 ├── agent/
 │   ├── __init__.py
 │   ├── prompts/
-│   │   ├── design_prompt.md         session design instruction (edit to tune output)
-│   │   └── discovery_prompt.md      topic discovery instruction (edit to tune output)
-│   ├── survey_designer.py           DB topic → KG → session.md → Harmonica session
+│   │   ├── design_prompt.md         session design instruction
+│   │   └── discovery_prompt.md      topic discovery instruction
+│   ├── data/
+│   │   └── facilitation_formats.md  20 complete facilitation prompts
+│   ├── survey_designer.py           DB topic → KG → design variations → session
 │   ├── topic_advisor.py             KG scan → N topic suggestions
 │   └── results_ingestor.py          Harmonica summary → KG entities/edges
 ├── store/
@@ -104,6 +120,11 @@ canon/
 │       ├── design/
 │       ├── sessions/
 │       └── index.md
+├── ui/
+│   ├── Create.py                    Streamlit entry point (deploy wizard)
+│   ├── app_utils.py                 Shared client initialisation
+│   └── pages/
+│       └── 1_Explore.py             Browse topics, designs, sessions
 ├── tests/
 │   ├── test_harmonica_client.py     unit tests (mocked httpx)
 │   └── test_integration_survey_designer.py  integration tests (live Bonfires)
@@ -139,7 +160,7 @@ Thin REST wrapper around `https://app.harmonica.chat/api/v1`.
 
 | Method | Description |
 |---|---|
-| `create_session(topic, goal, prompt, questions, ...)` | Create session, returns dict with `join_url` |
+| `create_session(topic, goal, prompt, questions, critical, ...)` | Create session, returns dict with `join_url` |
 | `get_session(session_id)` | Status, participant count, metadata |
 | `list_sessions(status, keyword)` | Filterable session list |
 | `update_session(session_id, **fields)` | PATCH arbitrary fields |
@@ -174,5 +195,5 @@ python -m pytest tests/ -v                                   # full suite
 
 ## Known Issues
 
-- **Sparse KG** — if `kg.search()` returns no relevant entities, the agent defaults to a generic session about "deliberation design". Populate the KG with relevant content before running.
+- **Sparse KG** — if `kg.search()` returns no relevant entities, the agent defaults to a generic session. Populate the KG with relevant content before running.
 - **Ingest pinning** — pins entities found by a post-sync KG search, not necessarily the newly created nodes. May miss entities not yet indexed.

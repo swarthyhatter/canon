@@ -11,6 +11,10 @@ _DISCOVERY_PROMPT = (
     Path(__file__).parent / "prompts" / "discovery_prompt.md"
 ).read_text()
 
+_FORMATS_LIBRARY_PATH = str(
+    Path(__file__).parent / "data" / "facilitation_formats.md"
+)
+
 
 class TopicAdvisor:
     """Queries the Bonfires KG and suggests deliberation topics + formats."""
@@ -40,6 +44,12 @@ class TopicAdvisor:
             tmp.write(f"# Discovery Context\n\n{entities_md}")
             tmp_path = tmp.name
 
+        formats_content = Path(_FORMATS_LIBRARY_PATH).read_text()
+        formats_block = (
+            "\n\n---\n# Facilitation Formats Reference Library\n\n"
+            + formats_content
+            + "\n---\n\n"
+        )
         prompt = _DISCOVERY_PROMPT.replace("<N>", str(n))
         self.bonfire.agents.sync(
             message=f"Discovery context{f': {query}' if query else ' (full scan)'}",
@@ -49,7 +59,7 @@ class TopicAdvisor:
         Path(tmp_path).unlink(missing_ok=True)
 
         response = self.bonfire.agents.chat(
-            message=prompt, graph_mode="adaptive"
+            message=prompt + formats_block, graph_mode="adaptive"
         )
         raw_text = extract_text(response)
         suggestions = parse_json_list(raw_text)
